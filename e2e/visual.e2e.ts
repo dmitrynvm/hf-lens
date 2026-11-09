@@ -8,7 +8,7 @@ test.beforeEach(async ({ page }) => {
   await expect(page.locator('.topbar-status')).toHaveText('L3 of 36')
 })
 
-for (const [key, view] of [['1', 'network'], ['2', 'block'], ['3', 'attention'], ['4', 'routing'], ['5', 'config']] as const) {
+for (const [key, view] of [['1', 'network'], ['2', 'block'], ['3', 'attention'], ['4', 'model'], ['5', 'config']] as const) {
   test(`${view} view`, async ({ page }) => {
     await page.locator('body').click({ position: { x: 1, y: 1 } }) // keys go to the page, not the Step button
     await page.keyboard.press(key)

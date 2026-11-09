@@ -1,6 +1,7 @@
 import type { GptOssConfig, LayerType } from '../model/config'
 import { kvCacheBytes } from '../model/kvcache'
 import { formatBytes } from '../model/params'
+import { KdaDecayGradient } from './KdaDecay'
 
 interface Props {
   config: GptOssConfig
@@ -16,21 +17,29 @@ function MaskPanel({ config: c, type, current }: { config: GptOssConfig; type: L
   const n = 4 * w // tokens shown: long enough that the window is visibly narrower than the context
   const s = S / n
   const sliding = type === 'sliding_attention'
+  const isKda = type === 'linear_attention'
   const points = sliding
     ? `0,0 ${S},${S} ${(n - w) * s},${S} 0,${w * s}`
     : `0,0 ${S},${S} 0,${S}`
   const count = c.layer_types.filter((t) => t === type).length
   return (
-    <figure className={`mask-panel ${sliding ? 'sliding' : 'full'}${current ? ' current' : ''}`}>
+    <figure className={`mask-panel ${isKda ? 'linear' : sliding ? 'sliding' : 'full'}${current ? ' current' : ''}`}>
       <svg viewBox={`0 0 ${PAD_L + S + 16} ${PAD_T + S + 40}`} role="img"
-        aria-label={sliding
-          ? `Sliding attention mask: each query sees the previous ${w} tokens plus the sink`
-          : 'Full causal attention mask: each query sees all previous tokens plus the sink'}>
+        aria-label={isKda
+          ? `Kimi Delta Attention: each query reads a recurrent state; earlier keys fade by the cumulative per-channel decay over ${n} tokens, no window and no sink`
+          : sliding
+            ? `Sliding attention mask: each query sees the previous ${w} tokens plus the sink`
+            : 'Full causal attention mask: each query sees all previous tokens plus the sink'}>
+        {isKda && <defs><KdaDecayGradient id="mask-kda-decay" /></defs>}
         <g transform={`translate(${PAD_L},${PAD_T})`}>
           <rect x={0} y={0} width={S} height={S} className="mask-bg" />
-          <polygon points={points} className="mask-on" />
-          <rect x={-18} y={0} width={10} height={S} className="mask-sink" />
-          <text x={-13} y={S + 14} className="t small-t" textAnchor="middle">sink</text>
+          <polygon points={points} className="mask-on" fill={isKda ? 'url(#mask-kda-decay)' : undefined} />
+          {!isKda && (
+            <>
+              <rect x={-18} y={0} width={10} height={S} className="mask-sink" />
+              <text x={-13} y={S + 14} className="t small-t" textAnchor="middle">sink</text>
+            </>
+          )}
           <text x={0} y={-8} className="t small-t">key 0 →</text>
           <text x={S} y={-8} className="t small-t" textAnchor="end">{n}</text>
           <text x={-24} y={8} className="t small-t" textAnchor="end">query 0</text>
@@ -41,10 +50,11 @@ function MaskPanel({ config: c, type, current }: { config: GptOssConfig; type: L
               <text x={(n - w / 2) * s} y={S + 26} className="t small-t" textAnchor="middle">{w} tokens</text>
             </g>
           )}
+          {isKda && <text x={S} y={S + 14} className="t small-t" textAnchor="end">older keys fade by ∏α</text>}
         </g>
       </svg>
       <figcaption>
-        <strong>{sliding ? `sliding window ${w}` : 'full causal'}</strong> · {count} layers
+        <strong>{isKda ? `KDA linear + conv${c.short_conv_kernel_size ?? 4}` : sliding ? `sliding window ${w}` : c.kv_lora_rank ? 'full causal (MLA)' : 'full causal'}</strong> · {count} layers
         {current && <span className="badge current-badge">selected layer</span>}
       </figcaption>
     </figure>
@@ -53,8 +63,8 @@ function MaskPanel({ config: c, type, current }: { config: GptOssConfig; type: L
 
 function HeadGroups({ config: c }: { config: GptOssConfig }) {
   const nh = c.num_attention_heads
-  const kv = c.num_key_value_heads
-  const group = nh / kv
+  const kv = Math.min(c.num_key_value_heads, 16)
+  const group = Math.max(1, Math.floor(nh / kv))
   const cell = 8
   const gap = 2
   const groupGap = 12
@@ -67,7 +77,7 @@ function HeadGroups({ config: c }: { config: GptOssConfig }) {
     <figure className="heads">
       <svg viewBox={`-4 0 ${width + 8} ${kvY + 40}`} role="img"
         aria-label={`${nh} query heads in ${kv} groups of ${group}; each group shares one key/value head`}>
-        <text x={0} y={14} className="t small-t">{nh} query heads (each with its own sink logit)</text>
+        <text x={0} y={14} className="t small-t">{nh} query heads{c.kv_lora_rank ? ` (shared KV latent rank ${c.kv_lora_rank})` : ' (each with its own sink logit)'}</text>
         {Array.from({ length: kv }, (_, g) => {
           const kvX = groupX(g) + groupW / 2
           return (
@@ -96,7 +106,10 @@ function HeadGroups({ config: c }: { config: GptOssConfig }) {
 
 export function AttentionPatterns({ config: c, layer }: Props) {
   const type = c.layer_types[layer]
-  const contexts = [c.rope_scaling.original_max_position_embeddings, c.max_position_embeddings / 4, c.max_position_embeddings]
+  const firstType: LayerType = c.layer_types.includes('linear_attention') ? 'linear_attention' : 'sliding_attention'
+  const isKimi = c.layer_types.includes('linear_attention')
+  const minCtx = c.rope_scaling.rope_type === 'none' ? 4096 : c.rope_scaling.original_max_position_embeddings
+  const contexts = [minCtx, c.max_position_embeddings / 4, c.max_position_embeddings]
   const rows = contexts.map((ctx) => {
     const actual = kvCacheBytes(c, ctx)
     const mha = kvCacheBytes(c, ctx, { kvHeads: c.num_attention_heads, useSliding: false })
@@ -107,11 +120,11 @@ export function AttentionPatterns({ config: c, layer }: Props) {
     <section className="panel attn" aria-label="Attention patterns and KV cache">
       <h2 className="section-title">Attention patterns &amp; KV cache</h2>
       <div className="masks" title={`${4 * c.sliding_window} tokens shown`}>
-        <MaskPanel config={c} type="sliding_attention" current={type === 'sliding_attention'} />
+        <MaskPanel config={c} type={firstType} current={type === firstType} />
         <MaskPanel config={c} type="full_attention" current={type === 'full_attention'} />
       </div>
 
-      <h3>Heads: grouped-query attention</h3>
+      <h3>{isKimi ? 'Heads: KDA + Multi-Latent Attention (MLA)' : 'Heads: grouped-query attention'}</h3>
       <HeadGroups config={c} />
 
       <h3 title={`per token per layer: ${c.num_key_value_heads} KV heads × ${c.head_dim} dims × K,V × 2 bytes; sliding layers keep the last ${c.sliding_window} tokens`}>KV cache per sequence (bf16)</h3>
@@ -120,10 +133,10 @@ export function AttentionPatterns({ config: c, layer }: Props) {
           <thead>
             <tr>
               <th className="num">context</th>
-              <th className="num">gpt-oss (GQA + sliding)</th>
-              <th className="num">GQA, all full</th>
+              <th className="num">{isKimi ? 'Kimi-K3 (KDA + MLA)' : 'gpt-oss (GQA + sliding)'}</th>
+              <th className="num">{isKimi ? 'MHA, all full' : 'GQA, all full'}</th>
               <th className="num">MHA ({c.num_attention_heads} KV heads), all full</th>
-              <th title="bars, top to bottom: gpt-oss, GQA all full, MHA; one scale per row">size vs MHA</th>
+              <th title="bars, top to bottom: actual, all full, MHA; one scale per row">size vs MHA</th>
             </tr>
           </thead>
           <tbody>

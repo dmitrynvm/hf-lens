@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { GPT_OSS_120B, GPT_OSS_20B } from './config'
+import { GPT_OSS_120B, GPT_OSS_20B, KIMI_K3 } from './config'
 import { attentionParams, expertParams, layerMemory, paramBreakdown, routerParams } from './params'
 import { simulateRouting } from './routing'
 
@@ -17,6 +17,16 @@ describe('paramBreakdown', () => {
     expect(b.total).toBe(20_914_757_184)
     expect(b.activeExclEmbed).toBe(3_608_307_264)
     expect(b.bytes).toBe(13_761_264_768)
+  })
+
+  it('computes Kimi-K3 hybrid total and active parameters', () => {
+    const b = paramBreakdown(KIMI_K3)
+    expect(b.total).toBeGreaterThan(2.7e12)
+    expect(b.total).toBeLessThan(2.8e12)
+    expect(b.activeExclEmbed).toBeGreaterThan(100e9)
+    expect(b.activeExclEmbed).toBeLessThan(110e9)
+    expect(layerMemory(KIMI_K3, 0).rows.find((r) => r.id === 'router')!.params).toBe(0)
+    expect(layerMemory(KIMI_K3, 1).rows.find((r) => r.id === 'router')!.params).toBe(7168 * 896 + 896)
   })
 
   it('computes per-module counts', () => {

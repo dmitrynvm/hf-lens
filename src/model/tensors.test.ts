@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { GPT_OSS_120B as c } from './config'
-import { attentionParams, expertMxfp4Params, expertParams, routerParams } from './params'
+import { GPT_OSS_120B as c, KIMI_K3 } from './config'
+import { attentionParams, expertMxfp4Params, expertParams, layerMemory, routerParams } from './params'
 import { globalTensors, layerTensors } from './tensors'
 
 const product = (shape: number[]) => shape.reduce((a, b) => a * b, 1)
@@ -20,6 +20,11 @@ describe('layerTensors', () => {
     const mx = layerTensors(c, 0).filter((t) => t.dtype === 'mxfp4')
     expect(mx.map((t) => t.name.split('.').at(-1))).toEqual(['gate_up_proj', 'down_proj'])
     expect(total(mx)).toBe(c.num_local_experts * expertMxfp4Params(c))
+  })
+
+  it.each([0, 1, 3])('Kimi-K3 layer %i tensors sum to layerMemory(KIMI_K3, %i).params', (i) => {
+    const tensors = layerTensors(KIMI_K3, i)
+    expect(total(tensors)).toBe(layerMemory(KIMI_K3, i).params)
   })
 })
 

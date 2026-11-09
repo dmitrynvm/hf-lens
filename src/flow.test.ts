@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { advanceFlow, retreatFlow, togglePlay, type FlowState } from './flow'
+import { advanceFlow, restartFlow, retreatFlow, togglePlay, type FlowState } from './flow'
 
 const L = 36
 const base: FlowState = { playing: true, step: null }
@@ -54,5 +54,11 @@ describe('togglePlay', () => {
 
   it('replays from the embedding once the token reached lm_head', () => {
     expect(togglePlay({ ...base, playing: false, step: L }, L)).toMatchObject({ step: -1, playing: true })
+  })
+})
+
+describe('restartFlow', () => {
+  it('resets to the embedding step and starts playing', () => {
+    expect(restartFlow()).toEqual({ step: -1, playing: true })
   })
 })

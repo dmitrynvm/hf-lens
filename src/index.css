@@ -38,6 +38,9 @@
   --bf16: #5a6169;
   --mxfp4: #176b39;
   --fail: #b42a21;
+  --dtype-int64: #b86e00;
+  --dtype-bf16: #0a62a6;
+  --dtype-mxfp4: #147a3d;
 
   color-scheme: light;
   accent-color: var(--line);
@@ -67,6 +70,9 @@
     --bf16: #9ba3ac;
     --mxfp4: #52c482;
     --fail: #ff7468;
+    --dtype-int64: #f5be4f;
+    --dtype-bf16: #68b8f8;
+    --dtype-mxfp4: #5ee696;
 
     color-scheme: dark;
   }
@@ -237,13 +243,20 @@ kbd {
 
 /* Tabs */
 
+.main-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 24px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--hairline);
+}
+
 .tabs {
   display: flex;
   flex-wrap: wrap;
   gap: 16px;
-  border-bottom: 1px solid var(--hairline);
 }
-
 .tab {
   display: inline-flex;
   align-items: center;
@@ -430,6 +443,10 @@ kbd {
 
 .form-actions-group { display: contents; }
 
+.speed-label { display: flex; justify-content: space-between; }
+.speed-label output { color: var(--ink); font-variant-numeric: tabular-nums; }
+.speed { width: 100%; margin: 2px 0 0; accent-color: var(--line); }
+
 .add-model {
   grid-column: 1 / -1;
   display: flex;
@@ -517,55 +534,39 @@ kbd {
 
 /* Layer stack: beads on a rod */
 
-.stack {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.stack-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 6px 12px;
-}
-
-.stack-legend {
-  display: inline-flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 2px 10px;
-  color: var(--muted);
-  font-size: var(--type-micro);
-}
-
-.stack-legend .legend-item { white-space: nowrap; }
-.stack-legend .swatch { display: inline-block; width: 8px; height: 8px; margin: 0 6px 0 0; border-radius: 50%; vertical-align: middle; }
-.swatch.sliding { background: var(--sliding); }
-.swatch.full { background: var(--full); }
-.swatch.end { background: var(--bf16); }
-
 .rod {
   position: relative;
+  flex: 1 1 320px;
   height: 28px;
   cursor: pointer;
   touch-action: none;
   user-select: none;
   display: flex;
   align-items: center;
-  margin: 6px 0 10px;
+  gap: 10px;
+  margin: 2px 0 4px;
+  outline: none; /* the selected bead and readout already show where focus is */
 }
 .rod-inner {
   position: relative;
-  width: 100%;
+  flex: 1;
   height: 20px;
+  display: grid;
+  grid-template-columns: repeat(var(--beads), minmax(0, 1fr));
+  gap: 1.5px;
+  padding: 2px;
   background: var(--track);
-  border-radius: 3px;
+  border-radius: 2px;
   border: 1px solid var(--hairline);
   box-sizing: border-box;
 }
-.rod-track { display: none; }
+.rod-readout {
+  min-width: 32px;
+  text-align: right;
+  font: 600 var(--type-meta)/1 var(--font-display);
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
 .rod-played {
   position: absolute;
   left: 0;
@@ -573,57 +574,45 @@ kbd {
   bottom: 0;
   background: var(--now-wash);
   opacity: 0.6;
-  border-radius: 2px 0 0 2px;
+  border-radius: 1px 0 0 1px;
   pointer-events: none;
 }
 .bead {
-  position: absolute;
-  top: 2px;
-  bottom: 2px;
-  width: calc(100% / var(--gaps) - 1.5px);
-  aspect-ratio: auto;
-  border-radius: 1.5px;
+  position: relative;
+  height: 100%;
+  min-width: 1px;
+  border-radius: 1px;
   box-sizing: border-box;
-  transition: opacity 0.1s ease;
 }
 .bead.sliding { background: var(--sliding); opacity: 0.85; }
 .bead.full { background: var(--full); opacity: 0.75; }
 .bead.end { background: var(--bf16); opacity: 0.75; }
 .bead.hover { filter: brightness(1.3); opacity: 1; z-index: 2; }
 .bead.selected {
-  outline: 2px solid var(--line);
-  outline-offset: 1px;
+  background: var(--line);
   z-index: 3;
   opacity: 1;
-  filter: brightness(1.2);
 }
-.bead.now { box-shadow: none; }
-.bead.now::after {
-  content: '';
-  position: absolute;
-  left: 50%;
-  top: -4px;
-  bottom: -4px;
-  width: 2px;
+.bead.now {
   background: var(--now);
-  transform: translateX(-50%);
-  box-shadow: 0 0 5px var(--now);
-  z-index: 5;
-  border-radius: 1px;
-  pointer-events: none;
+  opacity: 1;
+  z-index: 4;
 }
-.bead.now::before {
+.bead.selected::before {
   content: '';
   position: absolute;
   left: 50%;
   top: -7px;
-  width: 6px;
+  width: 9px;
   height: 6px;
-  background: var(--now);
-  transform: translateX(-50%) rotate(45deg);
+  background: var(--line);
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+  transform: translateX(-50%);
   z-index: 6;
-  border-radius: 1px;
   pointer-events: none;
+}
+.bead.selected.now::before {
+  background: var(--now);
 }
 .rod-label {
   position: absolute;
@@ -780,6 +769,9 @@ tfoot th {
 
 .diagram-scroll {
   overflow-x: auto;
+  /* Thin bar in its own gutter under the weight tape, not over it (overlay scrollbars draw inside the box). */
+  scrollbar-width: thin;
+  padding-bottom: 12px;
 }
 
 .block-svg {
@@ -958,6 +950,8 @@ tfoot th {
   opacity: 0.8;
 }
 
+.kda-stop { stop-color: var(--sliding); }
+
 .mask-sink {
   fill: var(--muted);
 }
@@ -1000,52 +994,6 @@ tfoot th {
   stroke-width: 1;
 }
 
-/* Expert routing heatmap */
-
-.routing-frame {
-  border-top: 1px solid var(--ink);
-  padding-top: 8px;
-}
-
-/* Drawn 1:1 (width/height set inline, sized to the frame) so cells stay square and text stays 9px. */
-.routing-svg {
-  display: block;
-  max-width: 100%;
-  height: auto;
-}
-
-.routing-svg .t {
-  fill: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 9px;
-}
-
-.routing-bg {
-  fill: var(--track);
-}
-
-.routing-band {
-  fill: none;
-}
-
-.routing-cell {
-  fill: var(--line);
-}
-
-.routing-row.selected .routing-band,
-.routing-row.current .routing-band {
-  stroke: var(--ink);
-  stroke-width: 1;
-}
-
-.routing-row.selected .t {
-  font-weight: 700;
-}
-
-.routing-row.selected .t,
-.routing-row.current .t {
-  fill: var(--ink);
-}
 
 /* Network diagram: residual stream with branching sublayers, oblique activation slabs */
 
@@ -1086,7 +1034,7 @@ tfoot th {
 /* The residual stream is the main road, as in the Block diagram; branches are its wires. */
 .net-stream {
   stroke: var(--ink);
-  stroke-width: 4;
+  stroke-width: 2;
 }
 
 .net-arrowhead-stream {
@@ -1101,83 +1049,115 @@ tfoot th {
 
 .net-wire {
   stroke: var(--muted);
-  stroke-width: 1.5;
+  stroke-width: 2;
+  transition: stroke 220ms ease, stroke-width 220ms ease;
 }
 
 .net-connector {
   stroke: var(--muted);
-  stroke-width: 1;
+  stroke-width: 2;
+  transition: stroke 220ms ease, stroke-width 220ms ease;
 }
 
-.net-arrowhead,
+.net-arrowhead {
+  fill: context-stroke;
+}
+
 .net-tap {
   fill: var(--muted);
+  transition: fill 220ms ease;
 }
 
 .net-svg .junction circle {
   fill: var(--paper);
   stroke: var(--ink);
   stroke-width: 2;
+  transition: stroke 220ms ease, fill 220ms ease;
 }
 
 .net-svg .junction path {
   stroke: var(--ink);
   stroke-width: 1.6;
+  transition: stroke 220ms ease;
 }
 
 /* Grammar: operations above in display type, dimensions below in mono. */
 .net-op {
   fill: var(--ink);
   font-family: var(--font-display);
-  font-size: 14px;
+  font-size: 11px;
   font-weight: 600;
 }
 
 .net-cap {
   fill: var(--muted);
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 10.5px;
 }
 
 .net-cap.routed {
   fill: var(--line);
 }
+.net-cap.dtype {
+  font-weight: 700;
+}
+.net-cap.int64 {
+  fill: var(--dtype-int64);
+}
+.net-cap.bf16 {
+  fill: var(--dtype-bf16);
+}
+.net-cap.mxfp4 {
+  fill: var(--dtype-mxfp4);
+}
+/* Tensor type picked in the sidebar: the dtype caption of every tensor stored in it. */
+.net-cap.picked {
+  fill: var(--fail);
+}
 
 .net-bracket {
   stroke: var(--field-edge);
   stroke-width: 1;
+  transition: stroke 220ms ease, stroke-width 220ms ease;
 }
 
+.net-pointer {
+  fill: transparent;
+  transition: fill 220ms ease;
+}
 .net-label {
   fill: var(--ink);
   font-family: var(--font-display);
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 600;
+  transition: fill 220ms ease;
 }
 
-.net-sub {
+.net-sublabel {
   fill: var(--muted);
   font-family: var(--font-display);
-  font-size: 16px;
-}
-
-.net-sublayer {
-  fill: var(--muted);
-  font-family: var(--font-display);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  transition: fill 220ms ease;
 }
-.net-sublayer.sliding { fill: var(--sliding); }
-.net-sublayer.full { fill: var(--full); }
+.net-sublabel.sliding,
+.net-op.sliding { fill: var(--sliding); }
 
-.net-bar.end { fill: var(--bf16); }
-.net-bar.sliding { fill: var(--sliding); }
-.net-bar.full { fill: var(--full); }
-.net-bar-type { fill: var(--paper); font-family: var(--font-display); font-size: 12px; font-weight: 600; letter-spacing: 0.04em; }
-.net-tape-key text { fill: var(--muted); font-family: var(--font-display); font-size: 13px; font-weight: 500; }
-.net-anno path { fill: none; stroke: var(--muted); stroke-width: 1; }
-.net-anno text { fill: var(--muted); font-family: var(--font-mono); font-size: 12px; }
+.net-bar.sliding { fill: var(--sliding); opacity: 0.85; }
+.net-bar.full { fill: var(--full); opacity: 0.75; }
+.net-bar.end { fill: var(--bf16); opacity: 0.75; }
+.net-bar-sep { stroke: var(--paper); stroke-width: 1.5; }
+.net-bar-sep.block-sep { stroke: var(--ink); stroke-width: 2; }
+.net-cap.net-tape-label { fill: var(--paper); font-weight: 600; pointer-events: none; }
+.net-mask-bg { fill: var(--field); stroke: var(--hairline); }
+.net-mask.sliding .net-mask-on { fill: var(--sliding); }
+.net-mask.full .net-mask-on { fill: var(--full); opacity: 0.8; }
+.net-mask-sink { fill: var(--muted); }
+.net-expert { fill: var(--track); }
+.net-expert.pad { fill: var(--paper); }
+.net-expert.on { fill: var(--line); }
+.net-mask-scan { fill: var(--accent); opacity: 0.9; pointer-events: none; }
+.net-expert-ring { fill: none; stroke: var(--accent); stroke-width: 1; pointer-events: none; }
 
 /* config.json: the file as written; hover a key for its remark */
 .cfg {
@@ -1223,6 +1203,12 @@ tfoot th {
 .cfg-cell.sliding { background: var(--sliding); }
 .cfg-cell.full { background: var(--full); }
 
+.net-group-stream {
+  stroke: transparent;
+  stroke-width: 2;
+  transition: stroke 220ms ease;
+}
+
 .net-bg {
   fill: transparent;
   stroke: none;
@@ -1233,23 +1219,68 @@ tfoot th {
   outline: none;
 }
 
-.net-group.clickable:hover .net-bg {
-  fill: var(--hover);
+.net-group.clickable:hover .net-bracket {
+  stroke: var(--ink);
+  stroke-width: 1.75;
 }
 
-.net-group.selected .net-bg {
-  fill: var(--select);
+.net-group.selected .net-bracket {
   stroke: var(--line);
-  stroke-width: 1.5;
+  stroke-width: 2;
 }
 
-.net-now {
+.net-group.selected .net-pointer {
+  fill: var(--line);
+}
+
+.net-group.selected .net-label {
+  fill: var(--line);
+}
+
+.net-group:focus-visible .net-bracket {
+  stroke: var(--line);
+  stroke-width: 3;
+}
+
+.net-group.now .net-group-stream {
+  stroke: var(--now);
+}
+
+.net-group.now .net-label,
+.net-group.now .net-sublabel {
+  fill: var(--now);
+}
+
+.net-group.now .net-bracket {
+  stroke: var(--now);
+  stroke-width: 2;
+}
+
+.net-group.now .net-pointer {
+  fill: var(--now);
+}
+.net-group.now .net-wire,
+.net-group.now .net-connector {
+  stroke: var(--now);
+}
+
+.net-group.now .net-tap {
+  fill: var(--now);
+}
+
+.net-group.now .junction circle {
+  stroke: var(--now);
   fill: var(--now-wash);
 }
 
-.net-group:focus-visible .net-bg {
-  stroke: var(--line);
-  stroke-width: 3;
+.net-group.now .junction path {
+  stroke: var(--now);
+}
+
+.net-group.now .slab .face.front {
+  stroke-width: 1.4;
+  filter: brightness(1.15);
+  transition: filter 220ms ease, stroke-width 220ms ease;
 }
 
 /* Narrow screens: sidebar stacks above the main area */

@@ -1,5 +1,5 @@
 import { useEffect, useRef, type Dispatch, type SetStateAction } from 'react'
-import { advanceFlow, retreatFlow, togglePlay, type FlowState } from '../flow'
+import { advanceFlow, restartFlow, retreatFlow, togglePlay, type FlowState } from '../flow'
 import type { GptOssConfig } from '../model/config'
 import { Icon } from './Icon'
 
@@ -28,12 +28,16 @@ export function TokenFlowControls({ flow, setFlow, config: c }: Props) {
   }, [])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.code !== 'Space' || e.repeat || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return
+      if ((e.code !== 'Space' && e.key !== 'Enter') || e.repeat || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return
       const t = e.target as HTMLElement | null
-      if (t?.closest('input, textarea, select, [contenteditable]')) return
+      if (t?.closest('input, textarea, [contenteditable]')) return
       if (t?.closest('button, a[href], summary, label, [role="button"], [role="tab"]') && !pointerFocus.current) return
-      e.preventDefault() // no page scroll, no click on the mouse-focused button
-      setFlow((f) => togglePlay(f, numLayers))
+      e.preventDefault() // no page scroll, no click on the mouse-focused button or select
+      if (e.key === 'Enter') {
+        setFlow(restartFlow)
+      } else {
+        setFlow((f) => togglePlay(f, numLayers))
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -74,10 +78,10 @@ export function TokenFlowControls({ flow, setFlow, config: c }: Props) {
       <button
         type="button"
         className="button-secondary button-icon-only"
+        aria-keyshortcuts="Enter"
         aria-label="Reset"
-        title="Reset"
-        onClick={() => setFlow((f) => ({ ...f, playing: false, step: null }))}
-        disabled={step === null}
+        title="Reset (Enter)"
+        onClick={() => setFlow(restartFlow)}
       >
         <Icon name="reset" />
       </button>

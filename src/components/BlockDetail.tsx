@@ -1,4 +1,4 @@
-import { type KeyboardEvent, type ReactNode } from 'react'
+import { type ReactNode } from 'react'
 import type { GptOssConfig } from '../model/config'
 import { formatBytes, formatCount, layerMemory } from '../model/params'
 import type { LayerRoute } from '../model/routing'
@@ -8,16 +8,12 @@ const GROUP_LABEL: Record<string, string> = {
   norm: 'norms', attention: 'attention', router: 'router', experts: 'experts',
 }
 
-export type Focus = 'attention' | 'moe' | null
-
 interface Props {
   config: GptOssConfig
   /** Whole checkpoint, to put one block's weights in proportion. */
   checkpointBytes: number
   layer: number
   route: LayerRoute | null
-  focus: Focus
-  onFocus: (f: Focus) => void
 }
 
 const W = 760
@@ -28,30 +24,14 @@ const GRID_COLS = 16
 const CELL = 16
 const GAP = 3
 
-function ClickableBox(props: {
-  label: string
-  pressed: boolean
-  onActivate: () => void
+function Box(props: {
   y: number
   h: number
   stroke: string
   children: ReactNode
 }) {
-  const onKeyDown = (e: KeyboardEvent<SVGGElement>) => {
-    if (e.key !== 'Enter' && e.key !== ' ') return
-    e.preventDefault()
-    props.onActivate()
-  }
   return (
-    <g
-      role="button"
-      tabIndex={0}
-      aria-label={props.label}
-      aria-pressed={props.pressed}
-      className={`svg-box${props.pressed ? ' pressed' : ''}`}
-      onClick={props.onActivate}
-      onKeyDown={onKeyDown}
-    >
+    <g className="svg-box">
       <rect x={BOX_X} y={props.y} width={BOX_W} height={props.h} rx={2} className="box" style={{ stroke: props.stroke }} />
       {props.children}
     </g>
@@ -77,7 +57,7 @@ function Norm({ y, eps }: { y: number; eps: number }) {
   )
 }
 
-export function BlockDetail({ config: c, checkpointBytes, layer, route, focus, onFocus }: Props) {
+export function BlockDetail({ config: c, checkpointBytes, layer, route }: Props) {
   const type = c.layer_types[layer]
   const H = c.hidden_size
   const I = c.intermediate_size
@@ -93,25 +73,28 @@ export function BlockDetail({ config: c, checkpointBytes, layer, route, focus, o
   const add1 = 306
   const norm2 = 326
   const moeY = 380
+  const isDense = layer < (c.first_k_dense_replace ?? 0)
+  const gridCols = E > 256 ? 32 : GRID_COLS
+  const cell = E > 256 ? 7 : CELL
+  const gap = E > 256 ? 2 : GAP
   const gridX = BOX_X + 20
   const gridY = moeY + 70
   // The explanation text beside the grid needs ~120px even when there are few experts (20b: 2 rows).
-  const gridH = Math.max(Math.ceil(E / GRID_COLS) * (CELL + GAP), 140)
-  const moeH = 70 + gridH + 72
+  const gridH = isDense ? 80 : Math.max(Math.ceil(E / gridCols) * (cell + gap), 140)
+  const routeRows = route && !isDense ? Math.ceil(route.experts.length / 2) : 1
+  const moeH = 70 + gridH + Math.max(72, 28 + routeRows * 22)
   const add2 = moeY + moeH + 26
   const H_SVG = add2 + 40
   const weightOf = new Map(route?.experts.map((e, i) => [e, route.weights[i]]) ?? [])
-  const rx = gridX + GRID_COLS * (CELL + GAP) + 16
+  const rx = gridX + gridCols * (cell + gap) + 16
 
-  const tensors = layerTensors(c, layer).filter((t) =>
-    focus === null ? true : focus === 'attention' ? t.group === 'attention' : t.group === 'router' || t.group === 'experts',
-  )
-  const mem = layerMemory(c)
+  const tensors = layerTensors(c, layer)
+  const mem = layerMemory(c, layer)
 
   return (
     <section className="panel detail" aria-label="Block detail">
       <div className="table-head">
-        <h2 className="section-title">Layer {layer} <span className="section-count">{type === 'sliding_attention' ? `sliding · last ${c.sliding_window} tokens` : 'full · all tokens'}</span></h2>
+        <h2 className="section-title">Layer {layer}</h2>
       </div>
       <div className="diagram-scroll">
       <svg viewBox={`0 0 ${W} ${H_SVG}`} className="block-svg" role="group" aria-label={`Decoder block ${layer} diagram`}>
@@ -127,16 +110,38 @@ export function BlockDetail({ config: c, checkpointBytes, layer, route, focus, o
         <line x1={BOX_X + BOX_W / 2} y1={74} x2={BOX_X + BOX_W / 2} y2={attnY} className="wire" markerEnd="url(#arrow)" />
         <text x={BOX_X + BOX_W / 2 + 8} y={88} className="t shape-t">[T, {H}]</text>
 
-        <ClickableBox label="Attention: show attention tensors" pressed={focus === 'attention'} onActivate={() => onFocus('attention')} y={attnY} h={attnH} stroke="var(--bf16)">
-          <text x={BOX_X + 14} y={attnY + 24} className="t title">Attention ({type === 'sliding_attention' ? `sliding window ${c.sliding_window}` : 'full'})</text>
-          <text x={BOX_X + 14} y={attnY + 50} className="t">Q [T, {nh}, {hd}]   K,V [T, {kv}, {hd}]   (bias: {String(c.attention_bias)})</text>
-          <text x={BOX_X + 14} y={attnY + 72} className="t">GQA: {nh / kv} query heads per KV head</text>
-          <text x={BOX_X + 14} y={attnY + 94} className="t">RoPE {c.rope_scaling.rope_type.toUpperCase()} ×{c.rope_scaling.factor} (θ={c.rope_theta}, base ctx {c.rope_scaling.original_max_position_embeddings})</text>
-          <text x={BOX_X + 14} y={attnY + 116} className="t">softmax(QKᵀ/√{hd} ‖ sink) · V   — scale 1/√{hd}</text>
-          <text x={BOX_X + 14} y={attnY + 138} className="t">sinks: {nh} learned logits (extra softmax denominator term)</text>
-          <text x={BOX_X + 14} y={attnY + 160} className="t">o_proj [T, {nh * hd}] → [T, {H}]</text>
+        <Box y={attnY} h={attnH} stroke="var(--bf16)">
+          {type === 'linear_attention' ? (
+            <>
+              <text x={BOX_X + 14} y={attnY + 24} className="t title">Attention (Kimi Delta Attention · KDA)</text>
+              <text x={BOX_X + 14} y={attnY + 50} className="t">Q,K,V [T, {nh}, {hd}]   short conv1d (kernel {c.short_conv_kernel_size ?? 4})</text>
+              <text x={BOX_X + 14} y={attnY + 72} className="t">decay gate f_a → f_b ({hd}d low-rank) + A_log, dt_bias, β gate b_proj</text>
+              <text x={BOX_X + 14} y={attnY + 94} className="t">recurrent state Sₜ = Diag(αₜ) Sₜ₋₁ + βₜ kₜ vₜᵀ   ([nh={nh}, {hd}×{hd}])</text>
+              <text x={BOX_X + 14} y={attnY + 116} className="t">output gate g_proj [T, {nh * hd}] · RMSNorm ({hd}d)</text>
+              <text x={BOX_X + 14} y={attnY + 138} className="t">o_proj [T, {nh * hd}] → [T, {H}]</text>
+            </>
+          ) : c.kv_lora_rank !== undefined ? (
+            <>
+              <text x={BOX_X + 14} y={attnY + 24} className="t title">Attention (Gated Multi-Latent Attention · MLA)</text>
+              <text x={BOX_X + 14} y={attnY + 50} className="t">q_a [T, {c.q_lora_rank}] → q_b [T, {nh}, {(c.qk_nope_head_dim ?? 128) + (c.qk_rope_head_dim ?? 64)}]   (nope {c.qk_nope_head_dim ?? 128} + RoPE {c.qk_rope_head_dim ?? 64})</text>
+              <text x={BOX_X + 14} y={attnY + 72} className="t">kv_a [T, {c.kv_lora_rank} + {c.qk_rope_head_dim ?? 64}] → kv_b [T, {nh}, {(c.qk_nope_head_dim ?? 128) + (c.v_head_dim ?? hd)}]</text>
+              <text x={BOX_X + 14} y={attnY + 94} className="t">KV cache stores compressed latent ({c.kv_lora_rank} + {c.qk_rope_head_dim ?? 64} dims/token)</text>
+              <text x={BOX_X + 14} y={attnY + 116} className="t">output gate g_proj [T, {nh * (c.v_head_dim ?? hd)}] · softmax(QKᵀ/√d)·V</text>
+              <text x={BOX_X + 14} y={attnY + 138} className="t">o_proj [T, {nh * (c.v_head_dim ?? hd)}] → [T, {H}]</text>
+            </>
+          ) : (
+            <>
+              <text x={BOX_X + 14} y={attnY + 24} className="t title">Attention ({type === 'sliding_attention' ? `sliding window ${c.sliding_window}` : 'full'})</text>
+              <text x={BOX_X + 14} y={attnY + 50} className="t">Q [T, {nh}, {hd}]   K,V [T, {kv}, {hd}]   (bias: {String(c.attention_bias)})</text>
+              <text x={BOX_X + 14} y={attnY + 72} className="t">GQA: {nh / kv} query heads per KV head</text>
+              <text x={BOX_X + 14} y={attnY + 94} className="t">RoPE {c.rope_scaling.rope_type.toUpperCase()} ×{c.rope_scaling.factor} (θ={c.rope_theta}, base ctx {c.rope_scaling.original_max_position_embeddings})</text>
+              <text x={BOX_X + 14} y={attnY + 116} className="t">softmax(QKᵀ/√{hd} ‖ sink) · V   — scale 1/√{hd}</text>
+              <text x={BOX_X + 14} y={attnY + 138} className="t">sinks: {nh} learned logits (extra softmax denominator term)</text>
+              <text x={BOX_X + 14} y={attnY + 160} className="t">o_proj [T, {nh * hd}] → [T, {H}]</text>
+            </>
+          )}
           <text x={BOX_X + BOX_W - 14} y={attnY + 24} className="t dtype bf16-t" textAnchor="end">bf16</text>
-        </ClickableBox>
+        </Box>
         <polyline points={`${BOX_X + BOX_W / 2},${attnY + attnH} ${BOX_X + BOX_W / 2},${add1} ${RES_X + 12},${add1}`} className="wire" markerEnd="url(#arrow)" fill="none" />
         <text x={BOX_X + BOX_W / 2 + 8} y={attnY + attnH + 20} className="t shape-t">[T, {H}]</text>
         <Junction y={add1} />
@@ -145,42 +150,72 @@ export function BlockDetail({ config: c, checkpointBytes, layer, route, focus, o
         <line x1={BOX_X + BOX_W / 2} y1={norm2 + 34} x2={BOX_X + BOX_W / 2} y2={moeY} className="wire" markerEnd="url(#arrow)" />
         <text x={BOX_X + BOX_W / 2 + 8} y={norm2 + 48} className="t shape-t">[T, {H}]</text>
 
-        <ClickableBox label="Mixture of experts: show MoE tensors" pressed={focus === 'moe'} onActivate={() => onFocus('moe')} y={moeY} h={moeH} stroke="var(--mxfp4)">
-          <text x={BOX_X + 14} y={moeY + 24} className="t title">MoE: top-{k} of {E}, softmax over selected</text>
-          <rect x={BOX_X + 14} y={moeY + 34} width={BOX_W - 28} height={24} rx={2} className="box sub" style={{ stroke: 'var(--bf16)' }} />
-          <text x={BOX_X + 24} y={moeY + 51} className="t">router [T, {H}] → logits [T, {E}] → top-{k} → softmax</text>
-          {Array.from({ length: E }, (_, e) => {
-            const w = weightOf.get(e)
-            return (
-              <rect
-                key={e}
-                x={gridX + (e % GRID_COLS) * (CELL + GAP)}
-                y={gridY + Math.floor(e / GRID_COLS) * (CELL + GAP)}
-                width={CELL}
-                height={CELL}
-                rx={1}
-                className={w === undefined ? 'cell' : 'cell on'}
-              >
-                <title>expert {e}{w === undefined ? '' : ` · weight ${w.toFixed(3)}`}</title>
-              </rect>
-            )
-          })}
-          <text x={rx} y={gridY + 10} className="t">each expert (MXFP4 weights):</text>
-          <text x={rx} y={gridY + 32} className="t">gate_up = x·W₁+b₁ → [T, {2 * I}]</text>
-          <text x={rx} y={gridY + 52} className="t">gate = clamp(g, max={lim})</text>
-          <text x={rx} y={gridY + 72} className="t">up = clamp(u, ±{lim})</text>
-          <text x={rx} y={gridY + 92} className="t">h = gate·σ(1.702·gate)·(up+1)</text>
-          <text x={rx} y={gridY + 112} className="t">down = h·W₂+b₂ → [T, {H}]</text>
-          <text x={rx} y={gridY + 132} className="t">out = Σ wᵢ · expertᵢ(x)</text>
-          <text x={BOX_X + BOX_W - 14} y={moeY + 24} className="t dtype mxfp4-t" textAnchor="end">mxfp4</text>
-          {route
-            ? route.experts.map((e, i) => (
-                <text key={e} x={gridX + (i % 2) * 260} y={gridY + gridH + 28 + Math.floor(i / 2) * 22} className="t active-t">
-                  expert {e} · w={route.weights[i].toFixed(3)}
-                </text>
-              ))
-            : <text x={gridX} y={gridY + gridH + 28} className="t muted-t">Play token flow to see this layer's routing</text>}
-        </ClickableBox>
+        <Box y={moeY} h={moeH} stroke={isDense ? 'var(--bf16)' : 'var(--mxfp4)'}>
+          {isDense ? (
+            <>
+              <text x={BOX_X + 14} y={moeY + 24} className="t title">Dense MLP ({c.hidden_act === 'situ' ? 'SiTU' : 'SwiGLU'}, layer {layer})</text>
+              <text x={BOX_X + 14} y={moeY + 56} className="t">gate_proj, up_proj: [T, {H}] → [T, {c.dense_intermediate_size ?? I}]</text>
+              <text x={BOX_X + 14} y={moeY + 80} className="t">h = {c.hidden_act === 'situ' ? `SiTU(gate) · up   (β=${c.activation_situ_beta ?? 4})` : 'SwiGLU(gate, up)'}</text>
+              <text x={BOX_X + 14} y={moeY + 104} className="t">down_proj: [T, {c.dense_intermediate_size ?? I}] → [T, {H}]</text>
+              <text x={BOX_X + BOX_W - 14} y={moeY + 24} className="t dtype bf16-t" textAnchor="end">bf16</text>
+            </>
+          ) : (
+            <>
+              <text x={BOX_X + 14} y={moeY + 24} className="t title">
+                {c.routed_expert_hidden_size ? `LatentMoE: top-${k} of ${E} + ${c.num_shared_experts ?? 0} shared` : `MoE: top-${k} of ${E}, softmax over selected`}
+              </text>
+              <rect x={BOX_X + 14} y={moeY + 34} width={BOX_W - 28} height={24} rx={2} className="box sub" style={{ stroke: 'var(--bf16)' }} />
+              <text x={BOX_X + 24} y={moeY + 51} className="t">
+                router [T, {H}] → logits [T, {E}] → top-{k} → {c.routed_expert_hidden_size ? 'sigmoid + norm' : 'softmax'}
+              </text>
+              {Array.from({ length: E }, (_, e) => {
+                const w = weightOf.get(e)
+                return (
+                  <rect
+                    key={e}
+                    x={gridX + (e % gridCols) * (cell + gap)}
+                    y={gridY + Math.floor(e / gridCols) * (cell + gap)}
+                    width={cell}
+                    height={cell}
+                    rx={1}
+                    className={w === undefined ? 'cell' : 'cell on'}
+                  >
+                    <title>expert {e}{w === undefined ? '' : ` · weight ${w.toFixed(3)}`}</title>
+                  </rect>
+                )
+              })}
+              {c.routed_expert_hidden_size ? (
+                <>
+                  <text x={rx} y={gridY + 10} className="t">LatentMoE (MXFP4 routed):</text>
+                  <text x={rx} y={gridY + 32} className="t">z = fc_latent_down(x) → [T, {c.routed_expert_hidden_size}]</text>
+                  <text x={rx} y={gridY + 52} className="t">w1, w3: [T, {c.routed_expert_hidden_size}] → [T, {I}]</text>
+                  <text x={rx} y={gridY + 72} className="t">h = SiTU(w1(z)) · w3(z)</text>
+                  <text x={rx} y={gridY + 92} className="t">w2: [T, {I}] → [T, {c.routed_expert_hidden_size}]</text>
+                  <text x={rx} y={gridY + 112} className="t">fc_latent_up(norm(Σ wᵢ·eᵢ(z)))</text>
+                  <text x={rx} y={gridY + 132} className="t">+ shared_experts(x) → [T, {H}]</text>
+                </>
+              ) : (
+                <>
+                  <text x={rx} y={gridY + 10} className="t">each expert (MXFP4 weights):</text>
+                  <text x={rx} y={gridY + 32} className="t">gate_up = x·W₁+b₁ → [T, {2 * I}]</text>
+                  <text x={rx} y={gridY + 52} className="t">gate = clamp(g, max={lim})</text>
+                  <text x={rx} y={gridY + 72} className="t">up = clamp(u, ±{lim})</text>
+                  <text x={rx} y={gridY + 92} className="t">h = gate·σ(1.702·gate)·(up+1)</text>
+                  <text x={rx} y={gridY + 112} className="t">down = h·W₂+b₂ → [T, {H}]</text>
+                  <text x={rx} y={gridY + 132} className="t">out = Σ wᵢ · expertᵢ(x)</text>
+                </>
+              )}
+              <text x={BOX_X + BOX_W - 14} y={moeY + 24} className="t dtype mxfp4-t" textAnchor="end">mxfp4</text>
+              {route
+                ? route.experts.map((e, i) => (
+                    <text key={e} x={gridX + (i % 2) * 260} y={gridY + gridH + 28 + Math.floor(i / 2) * 22} className="t active-t">
+                      expert {e} · w={route.weights[i].toFixed(3)}
+                    </text>
+                  ))
+                : <text x={gridX} y={gridY + gridH + 28} className="t muted-t">Play token flow to see this layer's routing</text>}
+            </>
+          )}
+        </Box>
         <polyline points={`${BOX_X + BOX_W / 2},${moeY + moeH} ${BOX_X + BOX_W / 2},${add2} ${RES_X + 12},${add2}`} className="wire" markerEnd="url(#arrow)" fill="none" />
         <text x={BOX_X + BOX_W / 2 + 8} y={moeY + moeH + 18} className="t shape-t">[T, {H}]</text>
         <Junction y={add2} />
@@ -223,8 +258,7 @@ export function BlockDetail({ config: c, checkpointBytes, layer, route, focus, o
       </div>
 
       <div className="table-head global-head">
-        <h3>Tensors{focus ? ` · ${focus}` : ''}</h3>
-        {focus && <button type="button" className="button-secondary" onClick={() => onFocus(null)}>Show all</button>}
+        <h3>Tensors</h3>
       </div>
       <div className="table-wrap">
         <table>

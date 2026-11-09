@@ -30,7 +30,7 @@ function LayerStrip({ types }: { types: string[] }) {
   return (
     <span className="cfg-strip">
       {types.map((t, i) => (
-        <span key={i} className={`cfg-cell ${t === 'sliding_attention' ? 'sliding' : 'full'}`}>
+        <span key={i} className={`cfg-cell ${t === 'sliding_attention' || t === 'linear_attention' ? 'sliding' : 'full'}`}>
           <title>{`L${i} · ${t}`}</title>
         </span>
       ))}
@@ -68,6 +68,16 @@ export function ConfigView({ model }: { model: ModelEntry }) {
         let j = i + 1
         while (!text[j].trim().startsWith(']')) j++
         body = <>{highlight(`${m[1]}"${m[2]}": [`)}<LayerStrip types={c.layer_types} />{text[j].trim()}</>
+        i = j
+        array = null
+      } else if ((path.endsWith('.kda_layers') || path.endsWith('.full_attn_layers')) && rest === '[') {
+        let j = i + 1
+        const items: string[] = []
+        while (!text[j].trim().startsWith(']')) {
+          items.push(text[j].trim().replace(/,$/, ''))
+          j++
+        }
+        body = highlight(`${m[1]}"${m[2]}": [${items.join(', ')}]${text[j].trim().slice(1)}`)
         i = j
         array = null
       }

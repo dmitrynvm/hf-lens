@@ -1,14 +1,16 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AddModel } from './components/AddModel'
 import { AttentionPatterns } from './components/AttentionPatterns'
-import { BlockDetail, type Focus } from './components/BlockDetail'
+import { BlockDetail } from './components/BlockDetail'
 import { ConfigView } from './components/ConfigView'
-import { ExpertRouting } from './components/ExpertRouting'
-import { LayerStack } from './components/LayerStack'
+import { LayerDetail, LayerRod } from './components/LayerStack'
 import { MainTabs } from './components/MainTabs'
+import { ModelSummary } from './components/ModelSummary'
 import { NetworkView } from './components/NetworkView'
 import { TokenFlowControls } from './components/TokenFlowControls'
-import { advanceFlow, flowStatus, type FlowState } from './flow'
+import { TensorTypePicker } from './components/TensorTypePicker'
+import { DEFAULT_TENSOR_TYPE, tensorTypes } from './model/safetensors'
+import { advanceFlow, flowStatus, STEP_MS, STEP_MS_MAX, STEP_MS_MIN, type FlowState } from './flow'
 import { BUILTIN_MODELS, DEFAULT_MODEL, findModel, type ModelEntry } from './model/config'
 import { loadCustomModels, saveCustomModels } from './model/hub'
 import { headerFacts } from './model/facts'
@@ -39,7 +41,7 @@ function parseHash(models: readonly ModelEntry[]): HashState {
   const layer = layerParam !== null && /^\d+$/.test(layerParam) ? Number(layerParam) : NaN
   return {
     model,
-    view: isMainView(v) ? v : 'network',
+    view: isMainView(v) ? v : MAIN_VIEWS[0].id,
     layer: layer < entry.config.num_hidden_layers ? layer : 0,
     end: isEnd(layerParam) ? layerParam : null,
   }
@@ -49,8 +51,6 @@ const hashOf = (s: HashState) => `#model=${s.model}&view=${s.view}&layer=${s.end
 
 /** Simulated routing is seeded so every load, link and screenshot shows the same experts. */
 const ROUTING_SEED = 42
-/** Token-flow playback: one step per this many ms. */
-const STEP_MS = 400
 
 export default function App() {
   const [models, setModels] = useState<readonly ModelEntry[]>(() => [...BUILTIN_MODELS, ...loadCustomModels()])
@@ -60,36 +60,45 @@ export default function App() {
   const [selectedLayer, setSelectedLayer] = useState(initial.layer)
   const [selectedEnd, setSelectedEnd] = useState(initial.end)
   const selected: Target = selectedEnd ?? selectedLayer
-  const select = (t: Target) => {
+  const select = useCallback((t: Target) => {
     if (typeof t === 'number') {
       setSelectedLayer(t)
       setSelectedEnd(null)
     } else {
       setSelectedEnd(t)
     }
-  }
-  const [focus, setFocus] = useState<Focus>(null)
+  }, [])
   const [flow, setFlow] = useState<FlowState>({ playing: false, step: null })
+  const [stepMs, setStepMs] = useState(STEP_MS)
   const entry = findModel(models, model)!
   const config = entry.config
   const L = config.num_hidden_layers
   const name = entry.name
+  /** Picking another model in the sidebar starts over at its first block; a hash link keeps the layer it names. */
+  const switchModel = (id: string) => {
+    setModel(id)
+    select(0)
+  }
   const addModel = (m: ModelEntry) => {
     if (!findModel(models, m.id)) {
       const next = [...models, m]
       setModels(next)
       saveCustomModels(next.filter((x) => !BUILTIN_MODELS.includes(x)))
     }
-    setModel(m.id)
+    switchModel(m.id)
   }
   const breakdown = useMemo(() => paramBreakdown(config), [config])
+  const types = useMemo(() => tensorTypes(entry), [entry])
+  const [tensorType, setTensorType] = useState(DEFAULT_TENSOR_TYPE)
+  // BF16 unless the user picked another type of this model (a model without BF16 falls back to its first type).
+  const tensorRow = types.find((r) => r.dtype === tensorType) ?? types[0]
   const routes = useMemo(() => simulateRouting(config, ROUTING_SEED), [config])
 
   useEffect(() => {
     if (!flow.playing) return
-    const id = setInterval(() => setFlow((f) => advanceFlow(f, L)), STEP_MS)
+    const id = setInterval(() => setFlow((f) => advanceFlow(f, L)), stepMs)
     return () => clearInterval(id)
-  }, [flow.playing, L])
+  }, [flow.playing, L, stepMs])
 
   useEffect(() => {
     history.replaceState(null, '', hashOf({ model, view, layer: selectedLayer, end: selectedEnd }))
@@ -119,7 +128,7 @@ export default function App() {
       if (e.repeat || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return
       const v = MAIN_VIEWS.find((m) => m.key === e.key)
       if (!v) return
-      if ((e.target as HTMLElement | null)?.closest('input, textarea, select, [contenteditable]')) return
+      if ((e.target as HTMLElement | null)?.closest('input, textarea, [contenteditable]')) return
       e.preventDefault()
       setView(v.id)
     }
@@ -133,6 +142,7 @@ export default function App() {
     setPrevModel(model)
     setSelectedLayer((l) => Math.min(l, L - 1))
     setFlow((f) => ({ ...f, playing: false, step: null }))
+    setTensorType(DEFAULT_TENSOR_TYPE)
   }
 
   // Selection follows the token everywhere it goes: the embedding (step -1), each layer, lm_head (step L).
@@ -165,24 +175,59 @@ export default function App() {
           <div className="field">
             <label className="field-label" htmlFor="model">Model</label>
             <div className="field-input">
-              <select id="model" value={model} onChange={(e) => setModel(e.target.value)}>
+              <select
+                id="model"
+                value={model}
+                onChange={(e) => {
+                  switchModel(e.target.value)
+                  e.currentTarget.blur()
+                }}
+                onKeyDown={(e) => {
+                  if (e.code === 'Space' || e.key === 'Enter') e.currentTarget.blur()
+                }}
+              >
                 {models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
               </select>
             </div>
+          </div>
+          <TensorTypePicker rows={types} value={tensorRow.dtype} onChange={setTensorType} />
+          <div className="field">
+            <label className="field-label speed-label" htmlFor="speed">
+              Speed <output htmlFor="speed">{(stepMs / 1000).toFixed(1)} s / step</output>
+            </label>
+            <input
+              id="speed"
+              className="speed"
+              type="range"
+              min={STEP_MS_MIN}
+              max={STEP_MS_MAX}
+              step={100}
+              // Right = faster: the slider runs over the step duration reversed.
+              value={STEP_MS_MIN + STEP_MS_MAX - stepMs}
+              aria-valuetext={`${(stepMs / 1000).toFixed(1)} seconds per step`}
+              onChange={(e) => setStepMs(STEP_MS_MIN + STEP_MS_MAX - Number(e.target.value))}
+            />
           </div>
           <div className="form-actions">
             <TokenFlowControls flow={flow} setFlow={setFlow} config={config} />
             <AddModel models={models} onAdd={addModel} />
           </div>
         </section>
-        <LayerStack config={config} selected={selected} onSelect={select} flowStep={flow.step} routes={routes} />
+        <LayerDetail config={config} selected={selected} flowStep={flow.step} routes={routes} />
       </aside>
 
       <main className="main">
-        <MainTabs view={view} onChange={setView} />
+        <div className="main-bar">
+          <MainTabs view={view} onChange={setView} />
+          <LayerRod config={config} selected={selected} onSelect={select} flowStep={flow.step} />
+        </div>
         <div className="view" role="tabpanel" id={`panel-${view}`} aria-labelledby={`tab-${view}`}>
+          {view === 'model' && <ModelSummary model={entry} breakdown={breakdown} />}
           {view === 'network' && (
-            <NetworkView config={config} modelName={name} routes={routes} selected={selected} flowStep={flow.step} onSelect={select} />
+            <NetworkView
+              config={config} modelName={name} routes={routes} selected={selected} flowStep={flow.step} stepMs={stepMs} onSelect={select}
+              highlight={tensorRow.storage}
+            />
           )}
           {view === 'block' && (
             <BlockDetail
@@ -190,14 +235,9 @@ export default function App() {
               checkpointBytes={breakdown.bytes}
               layer={selectedLayer}
               route={flow.step !== null && flow.step >= selectedLayer ? routes[selectedLayer] : null}
-              focus={focus}
-              onFocus={setFocus}
             />
           )}
           {view === 'attention' && <AttentionPatterns config={config} layer={selectedLayer} />}
-          {view === 'routing' && (
-            <ExpertRouting config={config} routes={routes} selectedLayer={selectedLayer} flowStep={flow.step} />
-          )}
           {view === 'config' && <ConfigView model={entry} />}
         </div>
       </main>

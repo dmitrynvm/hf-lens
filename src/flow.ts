@@ -1,3 +1,8 @@
+/** Token-flow playback: one step per this many ms by default; the sidebar's speed slider picks within the bounds. */
+export const STEP_MS = 1200
+export const STEP_MS_MIN = 300
+export const STEP_MS_MAX = 3000
+
 export interface FlowState {
   playing: boolean
   /** null = idle, -1 = embedding, 0..L-1 = layers, L = final norm + lm_head. */
@@ -19,7 +24,12 @@ export function retreatFlow(f: FlowState): FlowState {
 /** Play/pause; playing again after the token reached lm_head replays from the embedding, with no idle beat in between. */
 export function togglePlay(f: FlowState, numLayers: number): FlowState {
   if (f.playing) return { ...f, playing: false }
-  return { ...f, playing: true, step: f.step !== null && f.step >= numLayers ? -1 : f.step }
+  return { ...f, playing: true, step: f.step === null || f.step >= numLayers ? -1 : f.step }
+}
+
+/** Reset to the beginning (embedding) and start playing immediately. */
+export function restartFlow(): FlowState {
+  return { playing: true, step: -1 }
 }
 
 /** Where the token is, for the status line; layers use the same 0-based `L<i>` labels as the stack. */

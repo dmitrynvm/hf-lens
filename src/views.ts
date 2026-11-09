@@ -1,11 +1,11 @@
-export type MainView = 'network' | 'block' | 'attention' | 'routing' | 'config'
+export type MainView = 'model' | 'network' | 'block' | 'attention' | 'config'
 
-/** Main-column tabs with their keyboard shortcuts. */
+/** Main-column tabs with their keyboard shortcuts. Ids are URL `view=` values, kept stable across label changes. */
 export const MAIN_VIEWS: { id: MainView; label: string; key: string }[] = [
-  { id: 'network', label: 'Network', key: '1' },
+  { id: 'network', label: 'Model', key: '1' },
   { id: 'block', label: 'Block', key: '2' },
   { id: 'attention', label: 'Attention', key: '3' },
-  { id: 'routing', label: 'Routing', key: '4' },
+  { id: 'model', label: 'Params', key: '4' },
   { id: 'config', label: 'Config', key: '5' },
 ]
 

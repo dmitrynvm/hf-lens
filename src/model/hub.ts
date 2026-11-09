@@ -1,4 +1,4 @@
-import type { GptOssConfig, ModelEntry } from './config'
+import { normalizeKimiConfig, type GptOssConfig, type ModelEntry, type SafetensorsInfo } from './config'
 
 /**
  * Models added from a Hugging Face link. Only gpt_oss configs with MXFP4 experts are accepted: every size, KV and
@@ -26,14 +26,28 @@ const NUMBERS = [
   'swiglu_limit', 'rms_norm_eps',
 ] as const
 const ROPE_NUMBERS = ['factor', 'original_max_position_embeddings', 'beta_fast', 'beta_slow'] as const
+const KIMI_NUMBERS = [
+  'hidden_size', 'intermediate_size', 'moe_intermediate_size', 'num_hidden_layers', 'num_attention_heads',
+  'num_experts', 'num_experts_per_token', 'vocab_size', 'max_position_embeddings', 'rms_norm_eps',
+] as const
 
 const isObject = (x: unknown): x is Record<string, unknown> => x !== null && typeof x === 'object' && !Array.isArray(x)
 
 /** The config if this app can draw it; otherwise throws an Error that says what is missing or unsupported. */
 export function parseGptOssConfig(json: unknown): GptOssConfig {
   if (!isObject(json)) throw new Error('config.json is not a JSON object')
+  if (json.model_type === 'kimi_k3' || json.model_type === 'kimi_linear') {
+    const t = json.model_type === 'kimi_k3' && isObject(json.text_config) ? json.text_config : json
+    const q = t.quantization_config
+    if (!isObject(q) || (q.quant_method !== 'mxfp4' && q.format !== 'mxfp4-pack-quantized')) {
+      throw new Error('experts are not MXFP4 (quantization_config.quant_method); only MXFP4 checkpoints are supported')
+    }
+    const missing = KIMI_NUMBERS.filter((k) => typeof t[k] !== 'number')
+    if (missing.length) throw new Error(`config.json lacks ${missing.join(', ')}`)
+    return normalizeKimiConfig(json)
+  }
   if (json.model_type !== 'gpt_oss') {
-    throw new Error(`model_type is ${JSON.stringify(json.model_type ?? null)}; only gpt_oss models are supported`)
+    throw new Error(`model_type is ${JSON.stringify(json.model_type ?? null)}; only gpt_oss and kimi_k3 models are supported`)
   }
   const q = json.quantization_config
   if (!isObject(q) || q.quant_method !== 'mxfp4') {
@@ -55,7 +69,7 @@ export function parseGptOssConfig(json: unknown): GptOssConfig {
 }
 
 /** Entry for a repo from its config.json text; throws like `parseGptOssConfig`. */
-export function customModel(repo: string, text: string): ModelEntry {
+export function customModel(repo: string, text: string, safetensors: SafetensorsInfo | null = null): ModelEntry {
   let json: unknown
   try {
     json = JSON.parse(text)
@@ -63,7 +77,27 @@ export function customModel(repo: string, text: string): ModelEntry {
     throw new Error('config.json is not valid JSON')
   }
   const config = parseGptOssConfig(json)
-  return { id: repo, repo, name: repo, config, json: json as Record<string, unknown>, text }
+  return { id: repo, repo, name: repo, config, json: json as Record<string, unknown>, text, safetensors }
+}
+
+/** The hub's `safetensors` summary if it has the expected shape; otherwise null. */
+export function parseSafetensors(x: unknown): SafetensorsInfo | null {
+  if (!isObject(x) || !isObject(x.parameters) || typeof x.total !== 'number') return null
+  const values = Object.values(x.parameters)
+  if (!values.length || !values.every((v) => typeof v === 'number' && Number.isFinite(v) && v >= 0)) return null
+  return { parameters: { ...(x.parameters as Record<string, number>) }, total: x.total }
+}
+
+/** The repo's safetensors summary, or null when it cannot be had: it is optional, the config alone defines the model. */
+async function fetchSafetensors(repo: string): Promise<SafetensorsInfo | null> {
+  try {
+    const res = await fetch(`${HUB}/api/models/${repo}?expand%5B%5D=safetensors`)
+    if (!res.ok) return null
+    const json: unknown = await res.json()
+    return isObject(json) ? parseSafetensors(json.safetensors) : null
+  } catch {
+    return null
+  }
 }
 
 /** Downloads `config.json` from the repo's main branch. Rejects with a message fit for the user. */
@@ -78,7 +112,9 @@ export async function fetchModel(repo: string): Promise<ModelEntry> {
   if (res.status === 401 || res.status === 403) throw new Error(`${repo} does not exist, or is gated or private`)
   if (res.status === 404) throw new Error(`${repo} has no config.json`)
   if (!res.ok) throw new Error(`huggingface.co answered ${res.status}`)
-  return customModel(repo, await res.text())
+  const text = await res.text()
+  customModel(repo, text) // config errors surface before the optional second request
+  return customModel(repo, text, await fetchSafetensors(repo))
 }
 
 const STORAGE_KEY = 'gpt-oss.models'
@@ -95,7 +131,7 @@ export function loadCustomModels(storage: Pick<Storage, 'getItem'> = localStorag
   return saved.flatMap((s: unknown) => {
     if (!isObject(s) || typeof s.repo !== 'string' || typeof s.text !== 'string') return []
     try {
-      return [customModel(s.repo, s.text)]
+      return [customModel(s.repo, s.text, parseSafetensors(s.safetensors))]
     } catch {
       return []
     }
@@ -103,5 +139,5 @@ export function loadCustomModels(storage: Pick<Storage, 'getItem'> = localStorag
 }
 
 export function saveCustomModels(models: readonly ModelEntry[], storage: Pick<Storage, 'setItem'> = localStorage) {
-  storage.setItem(STORAGE_KEY, JSON.stringify(models.map(({ repo, text }) => ({ repo, text }))))
+  storage.setItem(STORAGE_KEY, JSON.stringify(models.map(({ repo, text, safetensors }) => ({ repo, text, safetensors }))))
 }

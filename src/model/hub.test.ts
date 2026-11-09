@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import text20b from './gpt-oss-20b.config.json?raw'
-import { customModel, loadCustomModels, repoFromLink, saveCustomModels } from './hub'
+import textKimiK3 from './kimi-k3.config.json?raw'
+import { customModel, loadCustomModels, parseSafetensors, repoFromLink, saveCustomModels } from './hub'
 
 describe('repoFromLink', () => {
   it('takes the repo id from model links, file links and bare ids', () => {
@@ -28,6 +29,15 @@ describe('customModel', () => {
     expect(m.config.num_hidden_layers).toBe(24)
   })
 
+  it('accepts a kimi_k3 MXFP4 config and normalizes its hybrid layers', () => {
+    const m = customModel('moonshotai/Kimi-K3', textKimiK3)
+    expect(m.config.num_hidden_layers).toBe(93)
+    expect(m.config.num_local_experts).toBe(896)
+    expect(m.config.num_experts_per_tok).toBe(16)
+    expect(m.config.layer_types.filter((t) => t === 'linear_attention')).toHaveLength(69)
+    expect(m.config.layer_types.filter((t) => t === 'full_attention')).toHaveLength(24)
+  })
+
   it('names what makes a config unsupported', () => {
     expect(() => customModel('a/b', '{')).toThrow('not valid JSON')
     expect(() => customModel('a/b', edit({ model_type: 'llama' }))).toThrow('model_type is "llama"')
@@ -39,13 +49,28 @@ describe('customModel', () => {
   })
 })
 
+describe('parseSafetensors', () => {
+  it('keeps the hub summary', () => {
+    const s = { parameters: { BF16: 2167371072, U8: 114661785600 }, total: 116829156672 }
+    expect(parseSafetensors(s)).toEqual(s)
+  })
+
+  it('rejects missing or malformed summaries', () => {
+    for (const x of [undefined, {}, { parameters: {}, total: 1 }, { parameters: { BF16: 'x' }, total: 1 }, { parameters: { BF16: 1 } }])
+      expect(parseSafetensors(x)).toBeNull()
+  })
+})
+
 describe('custom model storage', () => {
   it('round-trips added models and drops entries that no longer parse', () => {
     const store = new Map<string, string>()
     const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) }
-    saveCustomModels([customModel('acme/oss-ft', text20b)], storage)
+    const safetensors = { parameters: { BF16: 1, U8: 2 }, total: 3 }
+    saveCustomModels([customModel('acme/oss-ft', text20b, safetensors)], storage)
     store.set('gpt-oss.models', JSON.stringify([...JSON.parse(store.get('gpt-oss.models')!), { repo: 'x/y', text: '{}' }]))
-    expect(loadCustomModels(storage).map((m) => m.repo)).toEqual(['acme/oss-ft'])
+    const loaded = loadCustomModels(storage)
+    expect(loaded.map((m) => m.repo)).toEqual(['acme/oss-ft'])
+    expect(loaded[0].safetensors).toEqual(safetensors)
     store.set('gpt-oss.models', 'not json')
     expect(loadCustomModels(storage)).toEqual([])
   })
